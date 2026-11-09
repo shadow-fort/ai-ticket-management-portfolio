@@ -1,37 +1,96 @@
 # AI-Supported Ticket Management
 
-English portfolio for a university team project at the University of Duisburg-Essen. The team built a support assistant for the ZIM IT service desk. A person describes a request in a chat. A language model proposes one ITSM ticket category. [Zammad](https://zammad.com/) stores that category on the ticket. A support agent then reviews the ticket and can keep, change, or clear the category.
+Shared university project for the ZIM IT service desk at the University of Duisburg-Essen. The team built a support assistant that collects a request in a chat, proposes one ITSM ticket category, and stores that category on a [Zammad](https://zammad.com/) ticket. A support agent reviews an open ticket and can keep, change, or clear the category. The model does not send the support reply.
 
-This repository is a reviewed summary. It does not republish the application source, deployment configuration, credentials, or records from real support tickets. Examples in the [case study](docs/case-study.md) are fictional.
+This repository describes the project as a whole. It does not assign individual features to one author.
 
-## What the team built
+## Purpose
 
-The assistant collects the request, classifies it, and can open a ticket in Zammad. The category step is one part of that flow:
+People who need help from the university IT desk can describe the problem in a chat instead of filing a form by hand. The assistant turns that conversation into a Zammad ticket and proposes a category so the service desk can sort the request. The support team still decides how the open ticket is handled.
 
-1. The model reads the whole conversation, the issue description, and any extra details already collected.
-2. It must choose exactly one of **Incident**, **Service Request**, **Change**, **Problem**, or **Complaint**.
-3. If the returned label is not one of those five, the system stores **Service Request** instead.
-4. The chosen value is written to the Zammad ticket field `kategorie` (shown to agents as **Kategorie**) when the ticket is created or when its metadata is finalized. The same value is also copied into the ticket article.
-5. On an open support ticket, the support agent sees that field and decides whether it stays. The model does not send the support reply and does not decide that the request is resolved.
+## Features
 
-A separate path can close a ticket as solved by the chatbot, without a support agent. Human review of the suggested category happens on tickets that remain open for the service desk. The article text keeps the category from the moment it was written. A later change to the select field does not rewrite that article.
+- A Streamlit chat collects the request and can create a Zammad ticket.
+- A LangGraph workflow extracts the issue, classifies intent, asks for missing detail, and looks up FAQ or similar material.
+- The model must choose one of **Incident**, **Service Request**, **Change**, **Problem**, or **Complaint**. Any other label is stored as **Service Request**.
+- The chosen value is written to the Zammad field `kategorie` and copied into the ticket article. On an open ticket, an agent can keep, change, or clear the field. The article stays a snapshot.
+- A separate path can close a ticket as solved by the chatbot. Human review of the suggested category happens on tickets that stay open for the service desk.
+- Local mail is captured by Mailpit. The model can use a local Ollama fallback or an external API when that key is set in an uncommitted `.env` file.
 
-The diagram and the hand-off are in [Ticket triage](docs/architecture.md). A fictional walkthrough is in the [case study](docs/case-study.md).
+The category path is drawn in [Ticket triage](docs/architecture.md). A fictional walkthrough is in the [case study](docs/case-study.md).
 
-## Team
+## Architecture
 
-This was joint work. The implementation history records contributions from Michail Cheklin, Faruk-Emre Ertas, Ikram Hulich, Firas Khamis, Peter Krauza, Yvan Steve Tague Sokoudjou, and Max Unterbusch. Names are taken from that history, not from a separate roster.
+| Part | Role |
+| --- | --- |
+| `frontend/` | Streamlit chat, a mock clone for UI checks, and a local stand-in for login |
+| `backend/` | FastAPI entry point, LangGraph workflow, retrieval, and Zammad client |
+| `zammad/` | Upstream Zammad Compose stack and the category-field bootstrap |
+| Mailpit | Local SMTP catcher used by the development stack |
 
-## Personal contribution
+The backend reads secrets only from the environment. `example.env` lists the variable names and placeholders. A real `.env` file is ignored by git.
 
-Only work that appears under the git authors `taguesokoudjou` and `Tague Sokoudjou, Yvan Steve` is listed here:
+## Local start
 
-- Added ITSM ticket-category classification, including its documentation and the split between unit tests and live tests.
-- Moved the category configuration out of the graph node module.
-- Showed the classified category on the Zammad ticket as a customer-visible field that an agent can edit.
-- Added the one-time email transmission that runs when a public support-staff article is added, together with the related tests and CI wiring.
-- Also committed supporting work on incident escalation, ticket creation, the local container setup, and code cleanup. Those commits do not make the rest of the chatbot, retrieval, or interface a solo effort.
+Install Docker with Compose. From the repository root:
 
-## What this portfolio leaves out
+```bash
+cp example.env .env
+```
 
-Production tickets, student identifiers, mailboxes, API tokens, and internal host names are not included. The category rules on the triage page are a short English summary of the classifier, not a copy of the operational prompt.
+On Windows PowerShell:
+
+```powershell
+Copy-Item example.env .env
+```
+
+Fill the placeholders in `.env` on that machine. Leave `ZAMMAD_API_TOKEN`, `SAIA_API_KEY`, and `LANGSMITH_API_KEY` empty until the local Zammad workspace or an optional API is available. Do not commit `.env`.
+
+Start Zammad, the backend, the frontend, and Mailpit:
+
+```bash
+docker compose -f docker-compose.yml -f zammad/docker-compose.yml up -d
+```
+
+Add the local model as well:
+
+```bash
+docker compose -f docker-compose.yml -f zammad/docker-compose.yml -f zammad/scenarios/add-ollama.yml up -d
+```
+
+After the stack is up:
+
+| Service | URL |
+| --- | --- |
+| Zammad | http://localhost:8080 |
+| Zammad API | http://localhost:8080/api/v1/ |
+| Chat | http://localhost:8501 |
+| Backend | http://localhost:8000 |
+| Mailpit | http://localhost:8025 |
+
+Create the Zammad admin account in the browser, then create an API token under profile token access and put it in `.env`. Recreate the backend container so it reloads the variable. The first backend start can stay unhealthy while embedding models download. It is ready when the log shows `Application startup complete`.
+
+The bundled Zammad Compose file uses its upstream local development database password. That value is only for this local stack.
+
+## Tests
+
+From the repository root, with the backend and test dependencies installed and `PYTHONPATH` set to the root:
+
+```bash
+python -m pytest backend/tests/test_zammad_category.py tests/test_route_after_classification.py tests/test_ticket_category.py -q
+```
+
+`tests/test_ticket_category.py` mocks the model. Its regression-fixture check expects `backend/rag/old_tickets.json`. That ticket corpus is not in this repository, so that one check cannot load its file. Live model tests stay behind `RUN_LLM_CATEGORY_TESTS=1` and need an API key in the uncommitted environment. They are not part of the default local check.
+
+## What this copy leaves out
+
+- Real tokens, passwords, and any `.env` file.
+- `backend/rag/old_tickets.json`, the ticket corpus used by the regression fixtures.
+- Generated Chroma databases, test logs, and Deepeval telemetry.
+- The university GitLab CI configuration.
+
+Public FAQ extracts used by retrieval are included. They are knowledge-base text, not support-ticket records.
+
+## License
+
+The Zammad Docker material keeps the upstream GNU Affero General Public License notice in [`zammad/LICENSE`](zammad/LICENSE). The team project did not add a separate license file for the application code.

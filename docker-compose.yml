@@ -1,0 +1,158 @@
+services:
+  backend_app:
+    build:
+      context: .
+      dockerfile: backend/Dockerfile
+    ports:
+      - "8000:8000"
+    environment:
+      ZAMMAD_INTERNAL_URL: http://zammad-nginx:8080
+      ZAMMAD_API_TOKEN: ${ZAMMAD_API_TOKEN:-}
+      ZAMMAD_PUBLIC_URL: ${ZAMMAD_PUBLIC_URL:-http://localhost:8080}
+      OLLAMA_BASE_URL: http://ollama:11434
+      SAIA_API_KEY: ${SAIA_API_KEY:-}
+      USE_SAIA_API: ${USE_SAIA_API:-false}
+      LANGSMITH_TRACING: true
+      LANGSMITH_API_KEY: ${LANGSMITH_API_KEY:-}
+      LANGSMITH_ENDPOINT: https://eu.api.smith.langchain.com
+      AGENT: ${AGENT:-ZIM}
+      INCIDENT_ESCALATION_MIN_COUNT: ${INCIDENT_ESCALATION_MIN_COUNT}
+      INCIDENT_RECENCY_WINDOW_HOURS: ${INCIDENT_RECENCY_WINDOW_HOURS}
+      INCIDENT_SIMILARITY_THRESHOLD: ${INCIDENT_SIMILARITY_THRESHOLD}
+      EMAIL_TICKET_TRANSMISSION_ENABLED: ${EMAIL_TICKET_TRANSMISSION_ENABLED:-false}
+      EMAIL_TICKET_TRANSMISSION_RECIPIENT: ${EMAIL_TICKET_TRANSMISSION_RECIPIENT:-}
+      EMAIL_TICKET_TRANSMISSION_WEBHOOK_SECRET: ${EMAIL_TICKET_TRANSMISSION_WEBHOOK_SECRET:-}
+      EMAIL_TICKET_TRANSMISSION_DB_PATH: /data/email_ticket_transmissions.sqlite3
+      ZAMMAD_SMTP_HOST: ${ZAMMAD_SMTP_HOST:-mailpit}
+      ZAMMAD_SMTP_PORT: ${ZAMMAD_SMTP_PORT:-1025}
+      ZAMMAD_SMTP_USER: ${ZAMMAD_SMTP_USER:-}
+      ZAMMAD_SMTP_PASSWORD: ${ZAMMAD_SMTP_PASSWORD:-}
+      ZAMMAD_SUPPORT_EMAIL: ${ZAMMAD_SUPPORT_EMAIL:-support@localhost}
+      EMAIL_SMTP_HOST: ${EMAIL_SMTP_HOST:-}
+      EMAIL_SMTP_PORT: ${EMAIL_SMTP_PORT:-}
+      EMAIL_SMTP_USER: ${EMAIL_SMTP_USER:-}
+      EMAIL_SMTP_PASSWORD: ${EMAIL_SMTP_PASSWORD:-}
+      EMAIL_SMTP_FROM: ${EMAIL_SMTP_FROM:-}
+      EMAIL_SMTP_USE_TLS: ${EMAIL_SMTP_USE_TLS:-false}
+    depends_on:
+      - mailpit
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health')"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 180s
+    volumes:
+      - huggingface-models:/models
+      - flair-models:/flair_models
+      - email-transmission-data:/data
+
+  frontend_app:
+    build:
+      context: .
+      dockerfile: frontend/Dockerfile
+    ports:
+      - "8501:8501"
+      - "4999:4999"
+    environment:
+      BACKEND_URL: http://backend_app:8000
+      ZAMMAD_UI_URL: http://localhost:8080
+    depends_on:
+      backend_app:
+        condition: service_healthy
+
+  frontend_clone:
+    build:
+      context: .
+      dockerfile: frontend/Dockerfile
+    command:
+      [
+        "python",
+        "-m",
+        "streamlit",
+        "run",
+        "./frontend/app_clone.py",
+        "--server.headless",
+        "true",
+        "--server.port",
+        "8502",
+        "--server.address",
+        "0.0.0.0",
+      ]
+    ports:
+      - "8502:8502"
+    environment:
+      FRONTEND_MODE: mock
+
+  mailpit:
+    image: axllent/mailpit
+    restart: always
+    ports:
+      - "1025:1025"
+      - "8025:8025"
+    environment:
+      MP_DATABASE: /data/mailpit.db
+      MP_MAX_MESSAGES: 5000
+      MP_WEBHOOK_URL: http://backend_app:8000/api/webhook/email
+    volumes:
+      - mailpit-data:/data
+
+  zammad_bootstrap:
+    image: ${IMAGE_REPO:-ghcr.io/zammad/zammad}:${VERSION:-7.0.1-0035}
+    restart: "no"
+    depends_on:
+      - zammad-railsserver
+      - mailpit
+    environment:
+      APP_ENV: ${APP_ENV:-local}
+      MEMCACHE_SERVERS: ${MEMCACHE_SERVERS:-zammad-memcached:11211}
+      POSTGRESQL_DB: ${POSTGRES_DB:-zammad_production}
+      POSTGRESQL_HOST: ${POSTGRES_HOST:-zammad-postgresql}
+      POSTGRESQL_USER: ${POSTGRES_USER:-zammad}
+      POSTGRESQL_PASS: ${POSTGRES_PASS:-zammad}
+      POSTGRESQL_PORT: ${POSTGRES_PORT:-5432}
+      POSTGRESQL_OPTIONS: ${POSTGRESQL_OPTIONS:-?pool=50}
+      REDIS_URL: ${REDIS_URL:-redis://zammad-redis:6379}
+      TZ: "${TZ:-Europe/Berlin}"
+      ZAMMAD_SUPPORT_EMAIL: ${ZAMMAD_SUPPORT_EMAIL:?Set ZAMMAD_SUPPORT_EMAIL in .env}
+      ZAMMAD_SUPPORT_NAME: ${ZAMMAD_SUPPORT_NAME:?Set ZAMMAD_SUPPORT_NAME in .env}
+      ZAMMAD_SUPPORT_GROUP: ${ZAMMAD_SUPPORT_GROUP:?Set ZAMMAD_SUPPORT_GROUP in .env}
+      ZAMMAD_SMTP_HOST: ${ZAMMAD_SMTP_HOST:?Set ZAMMAD_SMTP_HOST in .env}
+      ZAMMAD_SMTP_PORT: ${ZAMMAD_SMTP_PORT:?Set ZAMMAD_SMTP_PORT in .env}
+      ZAMMAD_SMTP_USER: ${ZAMMAD_SMTP_USER:-}
+      ZAMMAD_SMTP_PASSWORD: ${ZAMMAD_SMTP_PASSWORD:-}
+      ZAMMAD_SMTP_DOMAIN: ${ZAMMAD_SMTP_DOMAIN:-}
+      ZAMMAD_CLOSE_TRIGGER_NAME: ${ZAMMAD_CLOSE_TRIGGER_NAME:?Set ZAMMAD_CLOSE_TRIGGER_NAME in .env}
+      ZAMMAD_REOPEN_TRIGGER_NAME: ${ZAMMAD_REOPEN_TRIGGER_NAME:?Set ZAMMAD_REOPEN_TRIGGER_NAME in .env}
+      ZAMMAD_REOPEN_MARKER_TAG: ${ZAMMAD_REOPEN_MARKER_TAG:?Set ZAMMAD_REOPEN_MARKER_TAG in .env}
+      BACKEND_ARTICLE_WEBHOOK_URL: ${BACKEND_ARTICLE_WEBHOOK_URL:-http://backend_app:8000/webhook/article-created}
+      EMAIL_TICKET_TRANSMISSION_WEBHOOK_SECRET: ${EMAIL_TICKET_TRANSMISSION_WEBHOOK_SECRET:-}
+      EMAIL_TICKET_TRANSMISSION_ENABLED: ${EMAIL_TICKET_TRANSMISSION_ENABLED:-false}
+    volumes:
+      - zammad-storage:/opt/zammad/storage
+      - ./zammad/bootstrap:/opt/zammad/bootstrap:ro
+    command:
+      - bash
+      - -lc
+      - |
+        for i in $(seq 1 60); do
+          if /opt/zammad/bin/rails runner "exit(Setting.get('system_init_done') && Group.find_by(name: ENV.fetch('ZAMMAD_SUPPORT_GROUP')) ? 0 : 1)" >/dev/null 2>&1; then
+            /opt/zammad/bin/rails runner /opt/zammad/bootstrap/configure_email.rb
+            /opt/zammad/bin/rails runner /opt/zammad/bootstrap/configure_category_field.rb
+            exit 0
+          fi
+          sleep 5
+        done
+        echo "Zammad bootstrap timed out waiting for initialization." >&2
+        exit 1
+
+volumes:
+  zammad-storage:
+  mailpit-data:
+  email-transmission-data:
+  huggingface-models:
+    # In this volume the Huggingface models for the PII anonymizer are persisted so that they do not
+    # have to be downloaded every time
+  flair-models:
+    # In this volume the Flair models for the PII anonymizer are persisted so that they do not
+    # have to be downloaded every time
