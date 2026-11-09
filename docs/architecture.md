@@ -54,3 +54,7 @@ The article body is a snapshot. It records the category that was current when th
 - Whether the suggested category stays, is replaced, or is cleared.
 - How the open ticket is handled and what is sent back to the person who asked.
 - The model does not approve its own category, and on this open-ticket path it does not close the request on behalf of the service desk.
+
+## Related pages
+
+- [Fictional case study](case-study.md)
