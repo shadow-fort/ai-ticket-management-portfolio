@@ -57,4 +57,5 @@ The article body is a snapshot. It records the category that was current when th
 
 ## Related pages
 
+- [Project overview](../README.md)
 - [Fictional case study](case-study.md)
