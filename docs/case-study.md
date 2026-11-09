@@ -42,4 +42,5 @@ If the model returned `VPN` instead of one of the five categories, the ticket wo
 
 ## Related pages
 
+- [Project overview](../README.md)
 - [Ticket triage](architecture.md)
